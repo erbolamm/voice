@@ -112,6 +112,17 @@ async def stream(ws: WebSocket):
     try:
         # Parse query params
         q = dict(ws.scope.get('query_string') or b'')
+        # If no text via query param, expect a start message with text
+        text = q.get('text', '') if isinstance(q, dict) else ''
+        if not text:
+            # wait for first message
+            try:
+                msg = await ws.receive_text()
+                parsed = json.loads(msg)
+                if isinstance(parsed, dict) and parsed.get('type') == 'start':
+                    text = parsed.get('text', '')
+            except Exception:
+                text = ''
         # send request received log
         await ws.send_text(json.dumps({
             'type': 'log',

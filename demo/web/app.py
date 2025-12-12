@@ -412,6 +412,24 @@ def streaming_tts(text: str, **kwargs) -> Iterator[np.ndarray]:
 async def websocket_stream(ws: WebSocket) -> None:
     await ws.accept()
     text = ws.query_params.get("text", "")
+    # If text not in query params, read an initial message with JSON { type:'start', text, cfg, steps }
+    if not text:
+        try:
+            recv = await ws.receive_text()
+            try:
+                payload = json.loads(recv)
+                if isinstance(payload, dict) and payload.get("type") == "start":
+                    text = payload.get("text", "")
+                    if payload.get("cfg") is not None:
+                        cfg_param = str(payload.get("cfg"))
+                    if payload.get("steps") is not None:
+                        steps_param = str(payload.get("steps"))
+                    if payload.get("voice") is not None:
+                        voice_param = payload.get("voice")
+            except Exception:
+                text = recv
+        except Exception:
+            text = ""
     print(f"Client connected, text={text!r}")
     cfg_param = ws.query_params.get("cfg")
     steps_param = ws.query_params.get("steps")

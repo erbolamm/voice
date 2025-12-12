@@ -920,21 +920,22 @@
     updateButtonLabel();
     createAudioChain();
 
-    const params = new URLSearchParams();
-    params.set('text', textValue);
-    if (!Number.isNaN(cfgValue)) {
-      params.set('cfg', cfgValue.toFixed(3));
-    }
-    if (!Number.isNaN(stepsValue)) {
-      params.set('steps', stepsValue.toString());
-    }
-    if (voiceValue) {
-      params.set('voice', voiceValue);
-    }
-    const wsUrl = `${location.origin.replace(/^http/, 'ws')}/stream?${params.toString()}`;
+    const wsUrl = `${location.origin.replace(/^http/, 'ws')}/stream`;
 
     socket = new WebSocket(wsUrl);
     socket.binaryType = 'arraybuffer';
+
+    socket.onopen = () => {
+      // send start message with text and params
+      const startMsg = JSON.stringify({
+        type: 'start',
+        text: textValue,
+        cfg: !Number.isNaN(cfgValue) ? cfgValue.toFixed(3) : null,
+        steps: !Number.isNaN(stepsValue) ? stepsValue : null,
+        voice: voiceValue || null,
+      });
+      socket.send(startMsg);
+    };
 
     socket.onmessage = event => {
       if (typeof event.data === 'string') {
