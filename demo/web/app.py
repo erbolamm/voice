@@ -412,7 +412,7 @@ def streaming_tts(text: str, **kwargs) -> Iterator[np.ndarray]:
 async def websocket_stream(ws: WebSocket) -> None:
     await ws.accept()
     text = ws.query_params.get("text", "")
-    # If text not in query params, read an initial message with JSON { type:'start', text, cfg, steps }
+    # If text not in query params, read an initial message with JSON { type:'start', text, sequence, cfg, steps }
     if not text:
         try:
             recv = await ws.receive_text()
@@ -420,6 +420,7 @@ async def websocket_stream(ws: WebSocket) -> None:
                 payload = json.loads(recv)
                 if isinstance(payload, dict) and payload.get("type") == "start":
                     text = payload.get("text", "")
+                    start_payload = payload
                     if payload.get("cfg") is not None:
                         cfg_param = str(payload.get("cfg"))
                     if payload.get("steps") is not None:
@@ -503,7 +504,21 @@ async def websocket_stream(ws: WebSocket) -> None:
 
         stop_signal = threading.Event()
 
-        iterator = streaming_tts(
+        # if a sequence of phrases was provided, iterate per phrase
+        seq = None
+        try:
+            seq = start_payload.get('sequence') if (('start_payload' in locals()) and start_payload) else None
+        except Exception:
+            seq = None
+
+        if seq and isinstance(seq, list) and len(seq) > 0:
+            def seq_iter():
+                for phrase in seq:
+                    for ch in service.stream(phrase, cfg_scale=cfg_scale, inference_steps=inference_steps, voice_key=voice_param, log_callback=enqueue_log, stop_event=stop_signal):
+                        yield ch
+            iterator = seq_iter()
+        else:
+            iterator = streaming_tts(
             text,
             cfg_scale=cfg_scale,
             inference_steps=inference_steps,
@@ -579,6 +594,7 @@ async def offer(request: Request):
     offer_sdp = data.get('sdp')
     offer_type = data.get('type')
     text = data.get('text', '')
+    sequence = data.get('sequence')
     cfg = float(data.get('cfg', 1.5))
     steps = int(data.get('steps', 5)) if data.get('steps') is not None else None
     voice = data.get('voice')
@@ -587,8 +603,15 @@ async def offer(request: Request):
         return {"error": "Invalid offer"}
 
     service: StreamingTTSService = app.state.tts_service
-    # Create generator from service.stream
-    generator = service.stream(text, cfg_scale=cfg, inference_steps=steps, voice_key=voice)
+    # Create generator from service.stream or from sequence
+    if sequence and isinstance(sequence, list) and len(sequence) > 0:
+        def seq_iter():
+            for phrase in sequence:
+                for ch in service.stream(phrase, cfg_scale=cfg, inference_steps=steps, voice_key=voice, log_callback=None, stop_event=None):
+                    yield ch
+        generator = seq_iter()
+    else:
+        generator = service.stream(text, cfg_scale=cfg, inference_steps=steps, voice_key=voice)
 
     pc = RTCPeerConnection()
     track = ModelAudioTrack(sample_rate=SAMPLE_RATE, generator=generator)

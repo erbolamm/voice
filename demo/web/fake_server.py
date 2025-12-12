@@ -47,6 +47,41 @@ class SineAudioTrack(MediaStreamTrack):
         return frame
 
 
+class SequenceSineAudioTrack(MediaStreamTrack):
+    """Generates sine audio for each phrase in sequence for short duration."""
+    kind = "audio"
+
+    def __init__(self, sample_rate=24000, freq=220.0, sequence=None, per_phrase_sec=1.0):
+        super().__init__()
+        self.sample_rate = sample_rate
+        self.freq = freq
+        self.phase = 0.0
+        self.phase_inc = 2.0 * math.pi * self.freq / self.sample_rate
+        self.frame_samples = int(self.sample_rate * 0.02)
+        self.sequence = sequence or []
+        self.per_phrase_sec = per_phrase_sec
+        self._phrase_index = 0
+        self._phrase_samples_total = int(self.per_phrase_sec * self.sample_rate)
+        self._generated_for_phrase = 0
+
+    async def recv(self):
+        if self._phrase_index >= len(self.sequence):
+            # End the track
+            raise asyncio.CancelledError()
+        data = np.zeros((self.frame_samples,), dtype=np.float32)
+        for i in range(self.frame_samples):
+            data[i] = math.sin(self.phase)
+            self.phase += self.phase_inc
+        frame = AudioFrame.from_ndarray(data, format="flt", layout="mono")
+        frame.sample_rate = self.sample_rate
+        self._generated_for_phrase += self.frame_samples
+        if self._generated_for_phrase >= self._phrase_samples_total:
+            self._phrase_index += 1
+            self._generated_for_phrase = 0
+        await asyncio.sleep(self.frame_samples / self.sample_rate)
+        return frame
+
+
 @app.post('/offer')
 async def offer(request: Request):
     """Handle incoming SDP offers and return SDP answers."""
@@ -57,7 +92,11 @@ async def offer(request: Request):
         return {"error": "Invalid offer"}
 
     pc = RTCPeerConnection()
-    track = SineAudioTrack(sample_rate=SAMPLE_RATE)
+    sequence = params.get('sequence')
+    if sequence and isinstance(sequence, list) and len(sequence) > 0:
+        track = SequenceSineAudioTrack(sample_rate=SAMPLE_RATE, sequence=sequence, per_phrase_sec=1.0)
+    else:
+        track = SineAudioTrack(sample_rate=SAMPLE_RATE)
     pc.addTrack(track)
 
     # set remote description
@@ -114,6 +153,21 @@ async def stream(ws: WebSocket):
         q = dict(ws.scope.get('query_string') or b'')
         # If no text via query param, expect a start message with text
         text = q.get('text', '') if isinstance(q, dict) else ''
+        sequence = None
+        if not text:
+            # If the client sends a start message with a sequence
+            try:
+                msg = await ws.receive_text()
+                parsed = json.loads(msg)
+                if isinstance(parsed, dict) and parsed.get('type') == 'start':
+                    # 'sequence' can be a list of phrases
+                    sequence = parsed.get('sequence')
+                    if isinstance(sequence, list) and len(sequence) > 0:
+                        text = sequence[0]
+                    else:
+                        text = parsed.get('text', '')
+            except Exception:
+                text = ''
         if not text:
             # wait for first message
             try:
@@ -131,16 +185,35 @@ async def stream(ws: WebSocket):
         }))
 
         first_chunk = True
-        async for chunk in generate_sine_chunks(freq=220.0, duration_sec=30.0, chunk_ms=40):
-            # After first chunk, send log
-            if first_chunk:
+        # If sequence of phrases provided, stream per phrase
+        if sequence and isinstance(sequence, list) and len(sequence) > 0:
+            for phrase in sequence:
+                # send a log with phrase info
                 await ws.send_text(json.dumps({
                     'type': 'log',
-                    'event': 'backend_first_chunk_sent',
-                    'data': {},
+                    'event': 'backend_phrase',
+                    'data': {'phrase': phrase},
                 }))
-                first_chunk = False
-            await ws.send_bytes(chunk)
+                async for chunk in generate_sine_chunks(freq=220.0, duration_sec=1.0, chunk_ms=40):
+                    if first_chunk:
+                        await ws.send_text(json.dumps({
+                            'type': 'log',
+                            'event': 'backend_first_chunk_sent',
+                            'data': {},
+                        }))
+                        first_chunk = False
+                    await ws.send_bytes(chunk)
+        else:
+            async for chunk in generate_sine_chunks(freq=220.0, duration_sec=30.0, chunk_ms=40):
+                # After first chunk, send log
+                if first_chunk:
+                    await ws.send_text(json.dumps({
+                        'type': 'log',
+                        'event': 'backend_first_chunk_sent',
+                        'data': {},
+                    }))
+                    first_chunk = False
+                await ws.send_bytes(chunk)
         # send final log
         await ws.send_text(json.dumps({
             'type': 'log',

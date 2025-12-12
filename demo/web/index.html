@@ -322,12 +322,33 @@
 
     <section class="panel">
       <label class="field">
-        <span class="field-label">Text</span>
-        <textarea
-          id="prompt"
-          class="text-input"
-          rows="4"
-        >Enter your text here and click "Start" to instantly hear the VibeVoice-Realtime TTS output audio.</textarea>
+          <span class="field-label">Texto en español</span>
+          <textarea
+            id="prompt_es"
+            class="text-input"
+            rows="4"
+          >Escribe el texto en español aquí...</textarea>
+      </label>
+
+      <label class="field">
+          <span class="field-label">Text in English (optional)</span>
+          <textarea
+            id="prompt_en"
+            class="text-input"
+            rows="4"
+          >Paste the English translation here (optional)</textarea>
+      </label>
+
+      <label style="display:flex;gap:12px;align-items:center;">
+        <input type="checkbox" id="learningMode" />
+        <span class="field-label">Modo aprendizaje (leer frase/es en Español y en Inglés)</span>
+      </label>
+      <label class="field" style="display:flex;gap:12px;align-items:center;">
+        <span class="field-label">Orden</span>
+        <select id="learningOrder" class="select-control">
+          <option value="es_en">Español → English</option>
+          <option value="en_es">English → Español</option>
+        </select>
       </label>
 
       <div id="streamingPreviewContainer">
@@ -397,7 +418,10 @@
   let hasStartedPlayback = false;
   let silentFrameCount = 0;
 
-  const promptInput = document.getElementById('prompt');
+  const promptEsp = document.getElementById('prompt_es');
+  const promptEng = document.getElementById('prompt_en');
+  const learningModeCheckbox = document.getElementById('learningMode');
+  const learningOrderSelect = document.getElementById('learningOrder');
   const streamingPreview = document.getElementById('streamingPreview');
   const controlBtn = document.getElementById('playback');
   const webrtcBtn = document.getElementById('webrtcBtn');
@@ -715,8 +739,15 @@
     appendLog('[Frontend] Controls reset to defaults (CFG=1.5, Steps=5)');
   });
 
-  if (promptInput) {
-    promptInput.addEventListener('input', () => {
+  if (promptEsp) {
+    promptEsp.addEventListener('input', () => {
+      if (previewActive) {
+        updateStreamingPreview();
+      }
+    });
+  }
+  if (promptEng) {
+    promptEng.addEventListener('input', () => {
       if (previewActive) {
         updateStreamingPreview();
       }
@@ -900,7 +931,11 @@
       return;
     }
 
-    const textValue = promptInput?.value || '';
+    const textValue = (learningModeCheckbox.checked)
+      ? null
+      : (promptEsp?.value || '');
+    const textEs = promptEsp?.value || '';
+    const textEn = promptEng?.value || '';
     const cfgValue = Number(cfgSelect.value);
     const stepsValue = Number(stepsSelect.value);
     const voiceValue = voiceSelect.value || '';
@@ -927,13 +962,37 @@
 
     socket.onopen = () => {
       // send start message with text and params
-      const startMsg = JSON.stringify({
-        type: 'start',
-        text: textValue,
-        cfg: !Number.isNaN(cfgValue) ? cfgValue.toFixed(3) : null,
-        steps: !Number.isNaN(stepsValue) ? stepsValue : null,
-        voice: voiceValue || null,
-      });
+      let payload = { type: 'start', cfg: !Number.isNaN(cfgValue) ? cfgValue.toFixed(3) : null, steps: !Number.isNaN(stepsValue) ? stepsValue : null, voice: voiceValue || null };
+      if (learningModeCheckbox.checked) {
+        // build sequence array from sentences of ES and EN
+        const buildSentences = text => {
+          if (!text) return [];
+          // split by punctuation (.,!?) and keep punctuation
+          const regex = /[^.!?]+[.!?]?/g;
+          const matches = text.match(regex) || [];
+          return matches.map(s => s.trim()).filter(Boolean);
+        };
+        const esSent = buildSentences(textEs);
+        const enSent = buildSentences(textEn);
+        const maxLen = Math.max(esSent.length, enSent.length);
+        const order = learningOrderSelect.value || 'es_en';
+        const sequence = [];
+        for (let i = 0; i < maxLen; i++) {
+          const esPart = esSent[i] || '';
+          const enPart = enSent[i] || '';
+          if (order === 'es_en') {
+            if (esPart) sequence.push(esPart);
+            if (enPart) sequence.push(enPart);
+          } else {
+            if (enPart) sequence.push(enPart);
+            if (esPart) sequence.push(esPart);
+          }
+        }
+        payload.sequence = sequence;
+      } else {
+        payload.text = textValue || '';
+      }
+      const startMsg = JSON.stringify(payload);
       socket.send(startMsg);
     };
 
