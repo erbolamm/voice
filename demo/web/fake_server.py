@@ -103,6 +103,18 @@ async def offer(request: Request):
     await pc.setRemoteDescription(RTCSessionDescription(sdp, type_))
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
+    # Try to set encoding parameters to favor Opus bitrate
+    try:
+        for sender in pc.getSenders():
+            if sender.track and sender.track.kind == 'audio':
+                params = sender.getParameters()
+                if params.encodings is None or len(params.encodings) == 0:
+                    params.encodings = [{}]
+                # set desired max bitrate in bps
+                params.encodings[0]['maxBitrate'] = 128000
+                sender.setParameters(params)
+    except Exception:
+        pass
     return {
         "sdp": pc.localDescription.sdp,
         "type": pc.localDescription.type,
