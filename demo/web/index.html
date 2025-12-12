@@ -356,6 +356,10 @@
           <span>Streaming Input Text</span>
         </div>
         <div id="streamingPreview" aria-live="polite">This area will display the streaming input text in real time.</div>
+        <div id="sequenceList" style="margin-top:12px; display:none;">
+          <strong>Secuencia:</strong>
+          <ol id="sequenceItems" style="padding-left:20px; margin-top:6px;"></ol>
+        </div>
       </div>
     </section>
           <span class="helper-text">This demo requires the full text to be provided upfront. The model then receives the text via streaming input during synthesis.<br>
@@ -428,6 +432,8 @@
   const cfgSelect = document.getElementById('cfgScale');
   const stepsSelect = document.getElementById('inferenceSteps');
   const voiceSelect = document.getElementById('voiceSelect');
+  const sequenceList = document.getElementById('sequenceList');
+  const sequenceItems = document.getElementById('sequenceItems');
   const cfgValueLabel = document.getElementById('cfgValue');
   const stepsValueLabel = document.getElementById('stepsValue');
   const modelGeneratedLabel = document.getElementById('modelGenerated');
@@ -448,6 +454,7 @@
   let recordedSamples = 0;
   let recordingComplete = false;
   let downloadUrl = null;
+  let currentSequence = null;
 
   const revokeDownloadUrl = () => {
     if (downloadUrl) {
@@ -615,6 +622,31 @@
     schedulePreviewTick();
   };
 
+  const renderSequenceList = seq => {
+    if (!sequenceList) return;
+    sequenceItems.innerHTML = '';
+    if (!seq || seq.length === 0) {
+      sequenceList.style.display = 'none';
+      return;
+    }
+    sequenceList.style.display = 'block';
+    seq.forEach((item, idx) => {
+      const li = document.createElement('li');
+      li.textContent = item;
+      li.dataset.idx = idx;
+      sequenceItems.appendChild(li);
+    });
+  };
+
+  const highlightSequenceItem = idx => {
+    if (!sequenceItems) return;
+    const nodes = sequenceItems.querySelectorAll('li');
+    nodes.forEach(n => n.style.background = '');
+    if (idx != null && nodes[idx]) {
+      nodes[idx].style.background = 'rgba(85,98,255,0.12)';
+    }
+  };
+
   const clearLogs = () => {
     if (logOutput) {
       logOutput.textContent = '';
@@ -705,14 +737,16 @@
         return;
       }
 
-      voices.forEach(voice => {
+      // Only keep English (en-) and Spanish (sp-) voices
+      const filtered = voices.filter(v => v.startsWith('en-') || v.startsWith('sp-') || v.startsWith('es-'));
+      filtered.forEach(voice => {
         const option = document.createElement('option');
         option.value = voice;
         option.textContent = voice;
         voiceSelect.appendChild(option);
       });
 
-      if (data.default_voice && voices.includes(data.default_voice)) {
+      if (data.default_voice && (data.default_voice.startsWith('en-') || data.default_voice.startsWith('sp-') || data.default_voice.startsWith('es-'))) {
         voiceSelect.value = data.default_voice;
       }
       voiceSelect.disabled = false;
@@ -801,7 +835,22 @@
         appendLog('[Backend]  Backend finished', timestamp);
         recordingComplete = true;
         updateSaveButtonState();
+        // clear highlight
+        highlightSequenceItem(null);
         break;
+      case 'backend_phrase':
+        appendLog('[Backend]  Phrase: ' + (data.phrase || ''), timestamp);
+        if (Array.isArray(currentSequence) && currentSequence.length) {
+          // find exact match or best match
+          let idx = currentSequence.indexOf(data.phrase);
+          if (idx === -1) {
+            idx = currentSequence.findIndex(s => data.phrase && s && s.startsWith(data.phrase.substring(0,5)));
+          }
+          if (idx !== -1) {
+            highlightSequenceItem(idx);
+          }
+        }
+        return;
       default:
         appendLog(`[Log] Event ${event}`, timestamp);
         break;
@@ -989,8 +1038,12 @@
           }
         }
         payload.sequence = sequence;
+        currentSequence = sequence;
+        renderSequenceList(sequence);
       } else {
         payload.text = textValue || '';
+        currentSequence = null;
+        renderSequenceList(null);
       }
       const startMsg = JSON.stringify(payload);
       socket.send(startMsg);
