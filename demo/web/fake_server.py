@@ -77,7 +77,7 @@ def index():
 @app.get('/config')
 def config():
     # Provide the voices listed in demo/voices/streaming_model
-    voices_dir = BASE.parent.parent / 'voices' / 'streaming_model'
+    voices_dir = BASE.parent / 'voices' / 'streaming_model'
     voices = []
     try:
         for p in voices_dir.glob('*.pt'):
